@@ -1,0 +1,255 @@
+/*
+<?xml version="1.0" encoding="UTF-8"?>
+<xml>
+        <description>
+                <b>control via RS485</b>
+                <br/> RS485: br 9600, n,8, 1
+        </description>
+
+        <tag value="import-script"/>
+
+    <item type="number" name="ID" value="1" required="1" min="1" max="99" comment="Адрес мотора штор" width="170"/>
+    <item type="number" name="NumCh" value="1" required="1" min="0" max="16" comment="Количество каналов" Width="170"/>
+    <item type="devices-list" name="RS485" filter="com-port" required="1" comment="RS485"/>
+    <item type="hidden" name="BLINDS" value="%TARGET%"/>
+
+    <item type="number" name="TOEDGETIME" value="2" min="1" max="60" comment="Остановка до ручного режима (сек)" />
+    <item type="number" name="TOEDGEVALUE" value="1" min="1" max="1" comment="Доводчик" />
+    <item type="number" name="ACCURATY"  required="1" value="5" min="0" max="250" comment="Точность" />
+    <item type="number" name="INTERVAL" value="20" required="1" min="10" max="2000" comment="Период опроса состояния (миллисекунды)" Width="170" />
+    
+    <additems>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="101" name="Штора 1" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="102" name="Штора 2" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="103" name="Штора 3" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="104" name="Штора 4" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="105" name="Штора 5" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="106" name="Штора 6" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="107" name="Штора 7" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="108" name="Штора 8" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="109" name="Штора 9" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="110" name="Штора 10" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="111" name="Штора 11" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="112" name="Штора 12" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="113" name="Штора 13" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="114" name="Штора 14" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="115" name="Штора 15" type="blinds" virtual="yes"/>
+        <additem tag="item" hw="dim=0" id="%TARGET%" sub-id="116" name="Штора 16" type="blinds" virtual="yes"/>
+    </additems>
+</xml>
+*/
+
+u8 readchan = 1;
+u8 poses[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+u8 destp[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+u8 direction[16] = {255,255,255,255,255,255,255,255,255,255,255,255,255,255,255,255};
+u32 stopt[16] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
+
+
+
+
+void sendCommand(u8  Channel, u8 cmd, u8 subcmd) {
+    u8 chlow = (1 << (Channel-1) ) & 0xff;  // Выбор канала
+    u8 chhigh = (1 << (Channel-1) ) >> 8 & 0xff; // Отправляется как битовая маска
+    if (Channel == 0) { 
+        chlow = 0xff;
+        chhigh = 0xff;
+    }
+    setStatus(RS485, { 0x9a, ID, chlow, chhigh, cmd, subcmd, ID ^ chlow ^ chhigh ^ cmd ^ subcmd}); 
+}
+
+
+
+V-ID/ms:INTERVAL
+{   
+    sendCommand(readchan+1, 0xcc, 0x00); // Одна команда чтения за такт таймера
+    readchan += 1;
+    readchan = readchan % NumCh;
+}
+
+
+V-ID/RS485
+{
+    u8 position;
+    u8 realpos;
+    u8 subid;
+    u8 i;
+    u8 chlow, chhigh;
+    i16 di=0;
+    i16 dd=0;
+
+    if ( opt(0) == 0xd8 && opt(1)==ID && opt(optl-1)==255 ) {
+        for (i=0; i < NumCh; ++i) {
+            chlow = (1 << (i) ) & 0xff; // выбор канала
+            chhigh = (1 << (i) ) >> 8 & 0xff;
+
+            if (chlow == opt(2) && chhigh == opt(3) ) {
+                subid = 101+i;
+                realpos = opt(7);
+                
+                
+                    if (realpos>=99) { // пересчёт 1-99 к 0-250
+                        position = 250;
+                    } else if (realpos<=1) {
+                        position = 0;
+                    } else {
+                        position = (250*(opt(7)-0))/(100-0); // попробовать 251, если не будет упираться
+                    }
+                
+                di = position - poses[i]; // смещение от прошлой позиции
+                dd = position - destp[i]; // смещёние от цели
+                
+                if ( direction[i] == 255) { // сброс последней позиции при рестарте
+                    poses[i] = position;
+                    setStatus(BLINDS:@subid, {0x07, position});
+                    stopt[i] = ms();
+                }
+                
+                if ( position != poses[i] ) {
+                    poses[i] = position;
+
+                    if ( direction[i] == 2 || direction[i] == 3 ) {
+                        if ( (dd > -ACCURATY ) && ( dd < ACCURATY) && (destp[i] < 250 - ACCURATY/2) && (destp[i] > 0 + ACCURATY/2)) {
+                            sendCommand(i+1, 0x0a, 0xCC);  // остановка 
+                            setStatus(BLINDS:@subid, {0x07, position}); // уставка цели 
+                            destp[i] = position;
+                            stopt[i] = ms();
+                            direction[i] = 4;
+                        }
+                    } 
+                    
+                    if (stopt[i] > ms()) // сброс при переходе через 0
+                        stopt[i] = 0;
+                    
+                    if ( ms() - stopt[i] > TOEDGETIME*1000 ) { // доводчик
+                        if (TOEDGEVALUE > 0) {
+                            if (di > 0)  setStatus(BLINDS:@subid, {0x07, 250});
+                            if (di < 0)  setStatus(BLINDS:@subid, {0x07, 0});
+                        } else {
+                            //setStatus(BLINDS:@subid, {0x07, position}); // отключение доводчика, не получилось
+                            direction[i] = 255;
+                        }
+                        stopt[i] = ms();
+                    } else if (  direction[i] == 255 ) {
+                         direction[i] = 0;
+                    }
+                      
+                    setStatus(BLINDS:@subid, {0x41, position}); // отправка позиции
+                }
+                //srvError("<%d", i);
+            }
+        }
+    }
+}
+
+
+void onWidget(u8 ch, u8 opt0, u8 opt1, u8 opt2, u8 optl) {
+    u8 status = (opt0 & 7);
+    i16 di = opt1 - opt2; // смещение текущей позиции от новой цели
+    if (di < 0) 
+         di = -di;
+    u8 i = ch - 1;
+
+    destp[i] = opt1;
+    direction[i] = status;
+    
+    stopt[i] = ms();
+
+    if (optl == 3 ) { // только трехбайтные команды
+        
+        if (di > ACCURATY || destp[i]==250 || destp[i]==0) { // не двигать на короткие растояния
+            if (status == 2 ) {
+                sendCommand(ch, 0x0a, 0xEE);  // открыть
+            } 
+            if (status == 3 ) {
+                sendCommand(ch, 0x0a, 0xDD); // закрыть
+            }
+         }  else {
+            sendCommand(ch, 0x0a, 0xCC);
+            direction[i] = 4;
+         }
+
+        if (status == 4 ) {
+            sendCommand(ch, 0x0a, 0xCC); // стоп
+        }
+    }
+    
+}
+
+
+V-ID/BLINDS:101
+{
+    onWidget(1, opt(0), opt(1), opt(2), optl);
+}
+
+V-ID/BLINDS:102
+{
+    onWidget(2, opt(0), opt(1), opt(2), optl);
+}
+
+V-ID/BLINDS:103
+{
+    onWidget(3, opt(0), opt(1), opt(2), optl);
+}
+
+V-ID/BLINDS:104
+{
+    onWidget(4, opt(0), opt(1), opt(2), optl);
+}
+
+V-ID/BLINDS:105
+{
+    onWidget(5, opt(0), opt(1), opt(2), optl);
+}
+
+V-ID/BLINDS:106
+{
+    onWidget(6, opt(0), opt(1), opt(2), optl);
+}
+
+V-ID/BLINDS:107
+{
+    onWidget(7, opt(0), opt(1), opt(2), optl);
+}
+
+V-ID/BLINDS:108
+{
+    onWidget(8, opt(0), opt(1), opt(2), optl);
+}
+
+V-ID/BLINDS:109
+{
+    onWidget(9, opt(0), opt(1), opt(2), optl);
+}
+
+V-ID/BLINDS:110
+{
+    onWidget(10, opt(0), opt(1), opt(2), optl);
+}
+V-ID/BLINDS:111
+{
+    onWidget(11, opt(0), opt(1), opt(2), optl);
+}
+
+V-ID/BLINDS:112
+{
+    onWidget(12, opt(0), opt(1), opt(2), optl);
+}
+V-ID/BLINDS:113
+{
+    onWidget(13, opt(0), opt(1), opt(2), optl);
+}
+
+V-ID/BLINDS:114
+{
+    onWidget(14, opt(0), opt(1), opt(2), optl);
+}
+V-ID/BLINDS:115
+{
+    onWidget(15, opt(0), opt(1), opt(2), optl);
+}
+
+V-ID/BLINDS:116
+{
+    onWidget(16, opt(0), opt(1), opt(2), optl);
+}
